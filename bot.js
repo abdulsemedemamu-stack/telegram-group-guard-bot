@@ -1,12 +1,12 @@
 require("dotenv").config();
 
+const http = require("http");
 const { Telegraf } = require("telegraf");
 const { pool, initDatabase } = require("./database");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
 const REQUIRED_MEMBERS = 25;
-
 const warningCooldown = new Map();
 const WARNING_COOLDOWN = 60 * 1000;
 
@@ -87,7 +87,6 @@ async function isAdmin(ctx) {
     return member.status === "administrator" || member.status === "creator";
   } catch (error) {
     console.log("❌ Admin check:", error.message);
-
     return false;
   }
 }
@@ -158,7 +157,6 @@ bot.command("help", async (ctx) => {
 bot.command("status", async (ctx) => {
   try {
     const user = await getOrCreateUser(ctx.from);
-
     const remaining = Math.max(0, REQUIRED_MEMBERS - user.invited_count);
 
     if (user.allowed === 1) {
@@ -196,7 +194,6 @@ bot.command("stats", async (ctx) => {
 
     if (!admin) {
       await ctx.reply("⛔ This command is only for administrators.");
-
       return;
     }
 
@@ -238,7 +235,6 @@ bot.command("user", async (ctx) => {
 
     if (!admin) {
       await ctx.reply("⛔ This command is only for administrators.");
-
       return;
     }
 
@@ -246,15 +242,13 @@ bot.command("user", async (ctx) => {
 
     if (parts.length < 2) {
       await ctx.reply("❌ Usage:\n\n/user USER_ID");
-
       return;
     }
 
     const userId = Number(parts[1]);
 
-    if (!Number.isInteger(userId)) {
+    if (!Number.isSafeInteger(userId)) {
       await ctx.reply("❌ Invalid user ID.");
-
       return;
     }
 
@@ -264,12 +258,10 @@ bot.command("user", async (ctx) => {
 
     if (result.rows.length === 0) {
       await ctx.reply("❌ User not found in the database.");
-
       return;
     }
 
     const user = result.rows[0];
-
     const remaining = Math.max(0, REQUIRED_MEMBERS - user.invited_count);
 
     await ctx.reply(
@@ -301,20 +293,17 @@ const linkRegex =
 bot.on("new_chat_members", async (ctx) => {
   try {
     const newMembers = ctx.message.new_chat_members;
-
     const inviter = ctx.from;
+
+    if (!inviter) return;
 
     const realMembers = newMembers.filter((member) => !member.is_bot);
 
-    if (realMembers.length === 0) {
-      return;
-    }
+    if (realMembers.length === 0) return;
 
     const admin = await isAdmin(ctx);
 
-    if (admin) {
-      return;
-    }
+    if (admin) return;
 
     await getOrCreateUser(inviter);
 
@@ -331,9 +320,7 @@ bot.on("new_chat_members", async (ctx) => {
         [inviter.id, member.id],
       );
 
-      if (existing.rows.length > 0) {
-        continue;
-      }
+      if (existing.rows.length > 0) continue;
 
       await pool.query(
         `
@@ -349,9 +336,7 @@ bot.on("new_chat_members", async (ctx) => {
       newInviteCount++;
     }
 
-    if (newInviteCount === 0) {
-      return;
-    }
+    if (newInviteCount === 0) return;
 
     const updatedUser = await addInviteCount(inviter, newInviteCount);
 
@@ -384,6 +369,14 @@ bot.on("message", async (ctx) => {
   try {
     const message = ctx.message;
 
+    // Only moderate group and supergroup messages
+    if (!ctx.chat || !["group", "supergroup"].includes(ctx.chat.type)) {
+      return;
+    }
+
+    // Ignore messages without a normal sender
+    if (!ctx.from) return;
+
     // Ignore commands
     if (message.text && message.text.startsWith("/")) {
       return;
@@ -402,9 +395,7 @@ bot.on("message", async (ctx) => {
     // Admins are allowed
     const admin = await isAdmin(ctx);
 
-    if (admin) {
-      return;
-    }
+    if (admin) return;
 
     const user = await getOrCreateUser(ctx.from);
 
@@ -413,7 +404,6 @@ bot.on("message", async (ctx) => {
       await ctx.deleteMessage();
 
       const now = Date.now();
-
       const lastWarning = warningCooldown.get(user.user_id) || 0;
 
       if (now - lastWarning >= WARNING_COOLDOWN) {
@@ -423,7 +413,7 @@ bot.on("message", async (ctx) => {
 
         await ctx.telegram.sendMessage(
           ctx.chat.id,
-          `እባኮ መጀመሪያ ቢያንስ 25 ሰው አድ ያድርጉ።\n\n` +
+          `❇️ ለግሩፑ እድገት ሲባል እባኮ መጀመሪያ ቢያንስ 25 ሰው አድ ያድርጉ።\n\n` +
             `ያስገቡት: ${user.invited_count}\n` +
             `የቀረው: ${remaining}\n\n` +
             `የትኛውም ሀሳብና ጥያቄ ካሎት ` +
@@ -442,7 +432,7 @@ bot.on("message", async (ctx) => {
     ) {
       await ctx.deleteMessage();
 
-      console.log(`🗑️ Forward deleted from ` + `${ctx.from.first_name}`);
+      console.log(`🗑️ Forward deleted from ${ctx.from.first_name}`);
 
       return;
     }
@@ -453,13 +443,40 @@ bot.on("message", async (ctx) => {
     if (linkRegex.test(text)) {
       await ctx.deleteMessage();
 
-      console.log(`🗑️ Link deleted from ` + `${ctx.from.first_name}`);
+      console.log(`🗑️ Link deleted from ${ctx.from.first_name}`);
 
       return;
     }
   } catch (error) {
     console.log("❌ Moderation error:", error.message);
   }
+});
+
+// ===============================
+// RENDER HTTP HEALTH SERVER
+// ===============================
+
+const PORT = process.env.PORT || 10000;
+
+const server = http.createServer((req, res) => {
+  if (req.url === "/health") {
+    res.writeHead(200, {
+      "Content-Type": "text/plain",
+    });
+
+    res.end("Group Guard Bot is healthy!");
+    return;
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/plain",
+  });
+
+  res.end("Group Guard Bot is running!");
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`🌐 HTTP server listening on port ${PORT}`);
 });
 
 // ===============================
@@ -470,9 +487,11 @@ async function startBot() {
   try {
     await initDatabase();
 
-    console.log("🤖 Group Guard Bot is running...");
+    console.log("✅ PostgreSQL database connected");
 
     await bot.launch();
+
+    console.log("🤖 Group Guard Bot is running...");
   } catch (error) {
     console.error("❌ Bot startup error:", error.message);
 
@@ -486,6 +505,21 @@ startBot();
 // STOP SAFELY
 // ===============================
 
-process.once("SIGINT", () => bot.stop("SIGINT"));
+async function shutdown(signal) {
+  console.log(`🛑 Received ${signal}. Shutting down...`);
 
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+  bot.stop(signal);
+
+  server.close();
+
+  try {
+    await pool.end();
+  } catch (error) {
+    console.log("Database shutdown error:", error.message);
+  }
+
+  process.exit(0);
+}
+
+process.once("SIGINT", () => shutdown("SIGINT"));
+process.once("SIGTERM", () => shutdown("SIGTERM"));
